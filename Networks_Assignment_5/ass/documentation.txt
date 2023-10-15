@@ -1,0 +1,78 @@
+﻿BRIEF DESCRIPTION ABOUT WHAT WE DONE IN ASSIGNMENT
+
+We implemented our own socket type , called MyTCP(SOCK_My_TCP) socket  and this guarantee that anything sent with single send call will recieved by a single receive call. While recieving if the buffer size is less it will recieve upto that many bytes and remaining are discarded i.e this recieving will behave similarly as UDP. This connection will be reliable and messages will be delivered exactly once in FIFO order as in TCP. This recieving of messages in FIFO order are implemented using the circular buffer.
+
+DATA STRUCTURES USED
+
+typedef struct {
+	char data[MAX_MESSAGE_LENGTH];
+	int length;
+} Message;
+
+This user defined datatype is used to store the message where in data we can store the content of the message and in question also mentioned to assume MAX_MESSAGE_LENGTH = 5000 and in length we will store the length of that message in bytes
+
+typedef struct {
+	int in;
+	int out;
+	int count;
+	Message Recieved_Message[MAX_ENTRIES];
+	pthread_mutex_t mutex;
+} Recieved_Message_Table;
+
+This used defined datatype is used to store the Recieved Messages table, where we can use circular buffer and store Recieved_Messages upto MAX_ENTRIES in question given to assume it as 10 and out is position from where my_recieve will take message(consumer) and in is position where recieve thread after recieving that complete message will store in circular buffer(producer) and count is gradually used to increase or decrease based on consumer and producer  and mutex is used to lock the critcal section i.e, here both producer and consumer are using this shared table so when one is updating this other cannot so to lock for one particlar thread we use mutex locks.
+
+typedef struct {
+	int in;
+	int out;
+	int count;
+	Message Send_Message[MAX_ENTRIES];
+	pthread_mutex_t mutex;
+} Send_Message_Table;
+
+This used defined datatype is used to store the Sendd Messages table, where we can use circular buffer and store Sendd_Messages upto MAX_ENTRIES in question given to assume it as 10 and in is position from where my_send will put the send message in send_message_table(producer) and out is position where send thread will take the message in FIFO order from send_messagetable and send using TCP send call(consumer) and count is gradually used to increase or decrease based on consumer and producer  and mutex is used to lock the critcal section i.e, here both producer and consumer are using this shared table so when one is updating this other cannot so to lock for one particlar thread we use mutex locks.
+
+Utility of R and S and Main threads
+
+The Main thread performs the task of executing the appropriate library function for our MyTCP sockets, as and when requested by the user. However there will be other tasks which must run concurrently like recieving the messages from TCP sockets and keeping it in recieved_message_table and sending messages from TCP sockets when my_send call kept messahe in send_message_table. Hence, we use two more threads R and S to handle these recieve and send concurrently.
+
+The thread R is resposible for handling all incoming messages into the underlying TCP socket. It waits for a message to come using the recv call. First it will recieve length of message in first 4 bytes and then based on length of message it will recieve complete message upto that many bytes and store that message in recieved_message_table. Further implementation will be in recv_thread function below.
+
+The thread S is responsible for sending all the messages from the underlying TCP socket. It sleeps for a time T, and wakes up periodically. On waking up, it sees the send_message_table if there is any message to send it will send first length of that message in first 4 bytes and sends the data of that message using send() call with max of 1000 bytes at 1 go and if message is more than 1000 bytes it will send repeatedly 1000 bytes. And remove that message from send_message_table. If there is no message to send it will sleep for T sec and checks again. Further implementation will be in send_thread function below.
+
+Description of all Functions
+
+Helper Functions which handles threads( only in mysocket.c )
+
+recv_thread : This is the function that is executed by thread R, and is responsible for recieving messages. It waits for a message by calling recv() which is a blocking call. It first recieves the first 4 bytes which is the length of the message that it is going to recieve. Now here we will recieve message upto given recieved length which we got above. After message is recieved completely we check if the recieved_message_table is full. If it is full it will wait until we have place in table to put message. Now we will lock recieved_message_table using pthread locks then we will insert message into recieved_message_table at in position and increase the in position and count value and unlock. Now this whole process is continuosly repeated. We also kept pthread_testcancel() which are cancellation points because in my_close we are cancelling threads so the signal will be sent here and that points will decide whether to cancel threads or not
+
+send_thread : This is the function that is executed by thread S, and is responsible for sending messages. Here along with the functionalities mentioned in utility of thread S, here is how it will remove the message from send_message_table it first locks the send_message_table and clear that position of message where the message is sent and it will increament the out position by 1 where it can send next message and decrease count by 1 and then unlocks it.
+
+Main Library Functions(in both mysocket.h and mysocket.c)
+
+my_socket : It opens a TCP socket with the socket call. It also create 2 threads R and S and allocates initial space for send_message_table and recieve_message_table and initializes and the respective fields of the table to 0 and the 2 locks for locking these 2 tables are also initialized. The parameters to these are the same as the TCP socket call, except that it will take only My_TCP as the socket type and this will return sockfd value of created socket.
+
+my_bind : It binds the socket with the server address-port using the bind call and it returns same as TCP bind call.
+
+my_listen : It makes a listen call which returns same as TCP listen call.
+
+my_accept : It accepts a connection on the MyTCP socket by making the accept call on the TCP socket returns the same value as TCP socket call.
+
+my_connect : It opens a connection through the MyTCP socket by making the connect call on the TCP socket and returns same value as TCP connect call.
+
+my_recv : It recieves a message and this is blocking call i.e if no message is in recieved_message_table it will sleep for 2 sec and continue checking and will return only if a message, sent using the my_send call is recieved this is achieved by looking at recieved_message_table and after recieving the message we remove from recieved_message_table while removing it first locks the recieved_message_table and increment out position and decrease the count value and then unlocks. If the buffer length specified is less than the message length, the extra bytes are discarded and ythe complete message is recieved in one go.  If the connection closed on other side it will return 0, if there is error on recieving message it returns -1
+
+my_send : It sends the message which is given in parameters in one send call. This first locks the send_message_table and just inserts the message into the send_message_table. After inserting it increment the in position and count value and then unlocks. If the the table is full it waits until it becomes free to insert in it. This is achieved by slleping 2 sec and check again whether table is full. It returns length of the message that is sent.
+
+my_close : It first sleeps for 5 seconds to ensure anything need to be send are there in send_message table then in that time it sends this is not optimal solution but just to ensure my_close donot immediately cancel threads and frees tables. After this it cancels i.e kills the threads R and S by issuing the pthread_cancel command. This allows the threads to terminate in an orderly fashion and ensure that all resourses are released. It then waits for the threads to terminate using pthread_join command. It then frees recieved_message_table and send_message_table. It then closes the socket using the close TCP call if it is sever it will close both newsockfd and sockfd if it is client it will close sockfd.
+
+
+
+
+
+Description Of What Happens If my_send call is Made
+
+First it will execute my_send function in mysocket.c and check is send_message_table is full or free to keep the  message if it is free then message  will be added to send_message_table and then send_thread function will check the send_message_table if there is any message to be sent then it will send using TCP send call and message is removed from send_message_table how it is done is describe in above send_thread functionality.  Implementation of every functionality is described in their respective functions.
+
+Description Of What Happens If my_recv call is Made
+
+First it will execute my_recv function in mysocket.c and check whether recieved_message_table is empty if empty then it will wait until table has some entry . If there is some message in recieved_message_table to sent then in my_recv that message is recieved and that message is removed from recieved_message_table. The recieved_message_table is filled by the recv_thread function where it recieves from TCP recv call and push that message into recieved_message_table. All the functionalities of how they are done are described in their respective functionalities

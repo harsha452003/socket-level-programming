@@ -1,0 +1,22 @@
+CC=gcc
+CFLAGS=-Wall
+
+user: user1 user2
+
+user1: my_client.o libmsocket.a
+	$(CC) $(CFLAGS) -o user1 my_client.o -L. -lmsocket -lpthread
+
+my_client.o: my_client.c
+	$(CC) $(CFLAGS) -c my_client.c
+
+user2: my_server.o libmsocket.a
+	$(CC) $(CFLAGS) -o user2 my_server.o -L. -lmsocket -lpthread
+
+my_server.o: my_server.c
+	$(CC) $(CFLAGS) -c my_server.c
+
+libmsocket.a: 
+	make -f makefile
+
+clean:
+	rm -f user1 my_client.o user2 my_server.o
